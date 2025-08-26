@@ -1,0 +1,67 @@
+{{- if .Values.configMaps.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "keyfront-bff.configMapName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keyfront-bff.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  # Application Configuration
+  NODE_ENV: {{ .Values.config.nodeEnv | quote }}
+  PORT: {{ .Values.config.port | quote }}
+  
+  # Session Configuration
+  SESSION_COOKIE_NAME: {{ .Values.config.sessionCookieName | quote }}
+  SESSION_MAX_AGE: {{ .Values.config.sessionMaxAge | quote }}
+  
+  # CORS Configuration
+  CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  
+  # Rate Limiting Configuration
+  RATE_LIMIT_RPM: {{ .Values.config.rateLimitRpm | quote }}
+  
+  # Keycloak Configuration (non-sensitive)
+  KC_ISSUER_URL: {{ .Values.keycloak.issuerUrl | quote }}
+  KC_CLIENT_ID: {{ .Values.keycloak.clientId | quote }}
+  KC_REDIRECT_URI: {{ .Values.keycloak.redirectUri | quote }}
+  KC_LOGOUT_REDIRECT_URI: {{ .Values.keycloak.logoutRedirectUri | quote }}
+  
+  # Redis Configuration (non-sensitive)
+  {{- if not .Values.redis.url }}
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  REDIS_DATABASE: {{ .Values.redis.database | quote }}
+  {{- end }}
+  
+  # Downstream API Configuration
+  {{- if .Values.downstreamApi.baseUrl }}
+  DOWNSTREAM_API_BASE: {{ .Values.downstreamApi.baseUrl | quote }}
+  {{- end }}
+  
+  # Health Check Configuration
+  HEALTH_CHECK_TIMEOUT: "5000"
+  HEALTH_CHECK_CACHE_TTL: "30000"
+  
+  # Monitoring Configuration
+  METRICS_ENABLED: "true"
+  METRICS_PATH: "/api/metrics"
+  
+  # Logging Configuration
+  LOG_LEVEL: {{ .Values.config.nodeEnv | eq "production" | ternary "info" "debug" | quote }}
+  LOG_FORMAT: "json"
+  
+  # Feature Flags
+  FEATURE_ABAC_ENABLED: "true"
+  FEATURE_TOKEN_EXCHANGE_ENABLED: "true"
+  FEATURE_BACKCHANNEL_LOGOUT_ENABLED: "true"
+  FEATURE_SECURITY_SCANNER_ENABLED: "true"
+  FEATURE_AUDIT_LOGGING_ENABLED: "true"
+{{- end }}

@@ -1,0 +1,11 @@
+{
+  "success": true,
+  "message": "Mock API is working!",
+  "endpoint": "unknown",
+  "timestamp": "2024-12-23T10:00:00Z",
+  "availableEndpoints": [
+    "/api/users",
+    "/api/orders", 
+    "/health"
+  ]
+}

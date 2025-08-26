@@ -1,0 +1,302 @@
+# Keyfront BFF - Git Ignore Configuration
+# Enterprise-grade BFF Gateway for Keycloak Integration
+
+# =============================================================================
+# Node.js & npm/yarn
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Package manager lock files (keep package-lock.json, ignore others)
+yarn.lock
+pnpm-lock.yaml
+.pnpm/
+
+# =============================================================================
+# Next.js
+# =============================================================================
+/.next/
+/out/
+next-env.d.ts
+.next/
+.swc/
+
+# Next.js build outputs
+build/
+dist/
+
+# Next.js cache
+.next/cache/
+
+# =============================================================================
+# TypeScript
+# =============================================================================
+*.tsbuildinfo
+.tsbuildinfo
+
+# =============================================================================
+# Testing & Coverage
+# =============================================================================
+coverage/
+*.lcov
+.nyc_output/
+
+# Jest cache
+.jest-cache/
+
+# Test results
+test-results/
+junit.xml
+test-report.html
+
+# =============================================================================
+# Environment & Configuration
+# =============================================================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# Keycloak & Redis configuration (sensitive)
+.env.keycloak
+.env.redis
+.env.secrets
+
+# =============================================================================
+# Development Tools
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ESLint cache
+.eslintcache
+
+# Prettier cache
+.prettiercache
+
+# =============================================================================
+# Logs & Debug
+# =============================================================================
+logs/
+*.log
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Runtime data
+runtime/
+temp/
+tmp/
+
+# =============================================================================
+# Security & Secrets (CRITICAL)
+# =============================================================================
+# Never commit secrets, keys, certificates
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Keycloak client secrets
+*client-secret*
+*session-secret*
+*jwt-secret*
+
+# Certificate files
+certs/
+ssl/
+
+# Security scan results (may contain sensitive info)
+security-reports/
+vulnerability-scan-*.json
+dependency-check-report.*
+
+# =============================================================================
+# Database & Cache
+# =============================================================================
+# Redis dumps
+dump.rdb
+*.rdb
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# Docker & Kubernetes
+# =============================================================================
+# Docker build context exclusions (handled by .dockerignore)
+# Kubernetes secrets
+k8s-secrets/
+*.kubeconfig
+
+# Helm secrets
+helm/secrets/
+values-secret*.yaml
+
+# =============================================================================
+# Monitoring & Observability
+# =============================================================================
+# Grafana local data
+grafana-data/
+
+# Prometheus data
+prometheus-data/
+
+# Application logs
+app-logs/
+audit-logs/
+error-logs/
+
+# =============================================================================
+# Performance & Benchmarking
+# =============================================================================
+# K6 results (keep structure, ignore data)
+benchmarks/results/*.json
+benchmarks/results/*.html
+benchmarks/results/raw/
+
+# Performance profiling data
+*.prof
+*.cpuprofile
+*.heapprofile
+
+# Load test data
+load-test-results/
+
+# =============================================================================
+# Build & Deployment
+# =============================================================================
+# Build artifacts
+*.tar.gz
+*.zip
+
+# Deployment scripts with secrets
+deploy-secrets.sh
+production-deploy.sh
+
+# CDK/Terraform state (if used)
+cdk.out/
+terraform.tfstate*
+.terraform/
+
+# =============================================================================
+# IDE & Editor
+# =============================================================================
+# VS Code workspace settings (keep shared, ignore personal)
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+
+# JetBrains IDEs
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/dictionaries/
+.idea/shelf/
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# =============================================================================
+# Operating System
+# =============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+Desktop.ini
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# =============================================================================
+# Temporary & Cache Files
+# =============================================================================
+# Temporary files
+.tmp/
+.temp/
+*.tmp
+*.temp
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# =============================================================================
+# Project-Specific Ignores
+# =============================================================================
+# Mock API data (development)
+mock-api/data/generated/
+
+# Local development overrides
+docker-compose.override.yml
+values-local.yaml
+
+# Generated documentation
+docs/generated/
+api-docs/
+
+# Local configuration overrides
+config/local/
+local.config.*
+
+# Backup files
+*.backup
+*.bak
+*.orig
+
+# =============================================================================
+# CI/CD & Automation
+# =============================================================================
+# GitHub Actions local runner data
+.github/runners/
+
+# CI/CD artifacts
+ci-artifacts/
+deployment-artifacts/
+
+# Pipeline cache
+.pipeline-cache/
+
+# =============================================================================
+# END OF GITIGNORE
+# =============================================================================
+# Note: This gitignore is designed for the Keyfront BFF project
+# Last updated: 2024-12-26
+# For updates, see: https://github.com/github/gitignore

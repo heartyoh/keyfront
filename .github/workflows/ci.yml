@@ -1,0 +1,493 @@
+name: 🚀 Keyfront BFF - Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Deploy to environment'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+        - none
+        - development
+        - staging
+        - production
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===== Code Quality & Security =====
+  code-quality:
+    name: 🔍 Code Quality & Security
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🧹 Lint check
+      run: npm run lint
+      
+    - name: 📏 TypeScript check
+      run: npm run type-check
+      
+    - name: 🔒 Security audit
+      run: npm audit --audit-level=high
+      continue-on-error: true
+      
+    - name: 📊 Upload lint results
+      uses: github/super-linter@v5
+      if: always()
+      env:
+        DEFAULT_BRANCH: main
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VALIDATE_ALL_CODEBASE: false
+        VALIDATE_TYPESCRIPT: true
+        VALIDATE_JAVASCRIPT: true
+        VALIDATE_DOCKERFILE: true
+        VALIDATE_YAML: true
+        VALIDATE_JSON: true
+
+  # ===== Unit Tests =====
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🧪 Run unit tests
+      run: npm test -- --coverage --ci --watchAll=false
+      env:
+        REDIS_URL: redis://localhost:6379
+        KC_ISSUER_URL: https://test.keycloak.local/realms/test
+        KC_CLIENT_ID: test-client
+        KC_CLIENT_SECRET: test-secret
+        SESSION_SECRET: test-session-secret-32-chars-min
+        
+    - name: 📊 Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage/lcov.info
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+        
+    - name: 📈 Coverage Report Summary
+      uses: romeovs/lcov-reporter-action@v0.3.1
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        lcov-file: ./coverage/lcov.info
+        delete-old-comments: true
+        
+    - name: ✅ Test Results Summary
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: 🧪 Unit Test Results
+        path: coverage/junit.xml
+        reporter: jest-junit
+        fail-on-error: true
+
+  # ===== Integration Tests =====
+  integration-tests:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+      keycloak:
+        image: quay.io/keycloak/keycloak:23.0
+        env:
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: admin
+          KC_HTTP_PORT: 8080
+        ports:
+          - 8080:8080
+        options: >-
+          --health-cmd "curl -f http://localhost:8080/health/ready || exit 1"
+          --health-interval 30s
+          --health-timeout 10s
+          --health-retries 5
+          
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🏗️ Build application
+      run: npm run build
+      
+    - name: 🚀 Start application
+      run: npm start &
+      env:
+        REDIS_URL: redis://localhost:6379
+        KC_ISSUER_URL: http://localhost:8080/realms/master
+        KC_CLIENT_ID: keyfront-test
+        KC_CLIENT_SECRET: test-secret
+        SESSION_SECRET: integration-test-secret-32-chars
+        
+    - name: ⏳ Wait for application
+      run: |
+        timeout 60 bash -c '
+          until curl -f http://localhost:3000/api/health; do
+            echo "Waiting for application..."
+            sleep 5
+          done
+        '
+        
+    - name: 🧪 Run integration tests
+      run: |
+        chmod +x test-api.sh
+        ./test-api.sh
+        
+    - name: 📊 Upload integration test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results
+        path: |
+          logs/
+          test-results/
+
+  # ===== Security Scanning =====
+  security-scan:
+    name: 🛡️ Security Scanning
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🔍 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: 📊 Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+        
+    - name: 🔒 OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'Keyfront BFF'
+        path: '.'
+        format: 'ALL'
+        
+    - name: 📊 Upload OWASP results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: owasp-dependency-check-results
+        path: reports/
+
+  # ===== Docker Build =====
+  docker-build:
+    name: 🐳 Docker Build & Test
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🔐 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 🏷️ Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          
+    - name: 🏗️ Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ steps.meta.outputs.version }}
+          
+    - name: 🔍 Test Docker image
+      run: |
+        docker run --rm --name keyfront-test \
+          -p 3000:3000 \
+          -e NODE_ENV=production \
+          -e SESSION_SECRET=docker-test-secret-32-chars-min \
+          ${{ steps.meta.outputs.tags }} &
+        
+        # Wait for container to start
+        sleep 10
+        
+        # Basic health check
+        curl -f http://localhost:3000/api/health || exit 1
+        
+        # Stop container
+        docker stop keyfront-test
+        
+    - name: 🛡️ Scan Docker image for vulnerabilities
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.meta.outputs.tags }}
+        format: 'sarif'
+        output: 'docker-trivy-results.sarif'
+        
+    - name: 📊 Upload Docker scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'docker-trivy-results.sarif'
+
+  # ===== Performance Benchmarks =====
+  performance-tests:
+    name: ⚡ Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'performance')
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: ⚡ Install K6
+      run: |
+        sudo gpg -k
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+        
+    - name: 🚀 Start application for benchmarking
+      run: npm start &
+      env:
+        NODE_ENV=production
+        REDIS_URL=redis://localhost:6379
+        SESSION_SECRET=benchmark-secret-32-chars-minimum
+        
+    - name: ⏳ Wait for application startup
+      run: |
+        timeout 60 bash -c '
+          until curl -f http://localhost:3000/api/health; do
+            echo "Waiting for application..."
+            sleep 5
+          done
+        '
+        
+    - name: ⚡ Run performance benchmarks
+      run: |
+        mkdir -p benchmarks/results
+        npm run benchmark:suite
+      env:
+        BFF_BASE_URL: http://localhost:3000
+        
+    - name: 📊 Upload benchmark results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: performance-benchmark-results
+        path: |
+          benchmarks/results/
+          
+    - name: 📈 Performance Report Summary
+      if: always()
+      run: |
+        if [ -f "benchmarks/results/benchmark-summary.json" ]; then
+          echo "## ⚡ Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract key metrics from the summary
+          node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('benchmarks/results/benchmark-summary.json', 'utf8'));
+            
+            console.log('| Scenario | Status | Success Rate |');
+            console.log('|----------|--------|--------------|');
+            
+            Object.values(data.scenarios || {}).forEach(scenario => {
+              console.log(\`| \${scenario.scenario.toUpperCase()} | \${scenario.status} | \${Math.round((scenario.passed?.successRate || 0) * 100)}% |\`);
+            });
+          " >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 [Detailed Report](./benchmarks/results/benchmark-report.html)" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  # ===== Deployment =====
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    needs: [docker-build, performance-tests]
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_environment != 'none')
+      
+    environment:
+      name: ${{ github.event.inputs.deploy_environment || 'development' }}
+      url: ${{ steps.deploy.outputs.app-url }}
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🎯 Determine deployment environment
+      id: env
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "environment=${{ github.event.inputs.deploy_environment }}" >> $GITHUB_OUTPUT
+        else
+          echo "environment=development" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: 🚀 Deploy to Kubernetes
+      id: deploy
+      run: |
+        echo "Deploying to ${{ steps.env.outputs.environment }} environment"
+        echo "Image: ${{ needs.docker-build.outputs.image-tag }}"
+        echo "app-url=https://keyfront-${{ steps.env.outputs.environment }}.example.com" >> $GITHUB_OUTPUT
+        
+        # Here you would add actual deployment commands:
+        # kubectl set image deployment/keyfront-bff keyfront-bff=${{ needs.docker-build.outputs.image-tag }}
+        # kubectl rollout status deployment/keyfront-bff
+        
+    - name: ✅ Deployment Success Notification
+      if: success()
+      run: |
+        echo "🎉 Deployment to ${{ steps.env.outputs.environment }} completed successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "🔗 Application URL: ${{ steps.deploy.outputs.app-url }}" >> $GITHUB_STEP_SUMMARY
+        echo "🐳 Docker Image: ${{ needs.docker-build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+
+  # ===== Cleanup =====
+  cleanup:
+    name: 🧹 Cleanup
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    
+    steps:
+    - name: 🗑️ Clean up old container images
+      run: |
+        echo "Cleaning up old container images..."
+        # Keep only the latest 10 images
+        # gh api repos/${{ github.repository }}/packages/container/keyfront-bff/versions \
+        #   --jq '.[10:] | .[] | .id' | \
+        #   xargs -I {} gh api --method DELETE /user/packages/container/keyfront-bff/versions/{}
+        
+    - name: 📊 Workflow Summary
+      run: |
+        echo "## 🏁 Workflow Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Duration**: ${{ github.event.head_commit.timestamp }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ CI/CD Pipeline completed successfully!" >> $GITHUB_STEP_SUMMARY

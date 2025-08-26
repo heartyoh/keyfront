@@ -1,0 +1,79 @@
+apiVersion: v2
+name: keyfront-bff
+description: |
+  Keyfront BFF - Enterprise-grade Backend-for-Frontend Gateway
+  
+  A comprehensive BFF solution providing secure authentication, authorization,
+  and API gateway capabilities with Keycloak integration. Features include:
+  
+  - OIDC Authentication with PKCE flow
+  - Multi-tenant session management
+  - ABAC/RBAC authorization
+  - Rate limiting & security headers
+  - Real-time monitoring & observability
+  - Token exchange & back-channel logout
+
+# Chart Type: application (default), library
+type: application
+
+# Application Version: This is the version of the application being deployed
+version: 0.1.0
+
+# Chart Version: This is the version of the chart itself
+appVersion: "0.1.0"
+
+# Keywords for easier discovery
+keywords:
+  - bff
+  - backend-for-frontend
+  - keycloak
+  - authentication
+  - authorization
+  - gateway
+  - oidc
+  - security
+  - enterprise
+
+# Project Home Page
+home: https://github.com/your-org/keyfront
+
+# Source Code Repository
+sources:
+  - https://github.com/your-org/keyfront
+
+# Maintainers
+maintainers:
+  - name: Keyfront Team
+    email: team@keyfront.io
+    url: https://keyfront.io
+
+# Minimum Kubernetes version required
+kubeVersion: ">=1.21.0"
+
+# Chart dependencies (none for now)
+dependencies: []
+
+# Annotations for additional metadata
+annotations:
+  # Category for Helm Hub/Artifact Hub
+  category: Security
+  
+  # License
+  licenses: MIT
+  
+  # Container images used by this chart
+  images: |
+    - name: keyfront-bff
+      image: keyfront/bff:0.1.0
+  
+  # Security and compliance
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/operator: "false"
+  
+  # Change log
+  artifacthub.io/changes: |
+    - Initial Helm Chart release
+    - Support for production deployment
+    - Enterprise security features included
+    - Monitoring and observability ready

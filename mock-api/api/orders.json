@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "data": [
+    {
+      "id": "ord_001",
+      "userId": "1", 
+      "amount": 99.99,
+      "status": "completed",
+      "items": [
+        {"name": "Widget", "quantity": 2, "price": 49.99}
+      ]
+    },
+    {
+      "id": "ord_002",
+      "userId": "2",
+      "amount": 149.99, 
+      "status": "pending",
+      "items": [
+        {"name": "Gadget", "quantity": 1, "price": 149.99}
+      ]
+    }
+  ],
+  "timestamp": "2024-12-23T10:00:00Z"
+}

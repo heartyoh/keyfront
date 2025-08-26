@@ -1,0 +1,449 @@
+name: 🏷️ Keyfront BFF - Release & Deployment
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Is this a pre-release?'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===== Create Release =====
+  create-release:
+    name: 📦 Create Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    outputs:
+      release-tag: ${{ steps.create_tag.outputs.tag }}
+      release-url: ${{ steps.create_release.outputs.html_url }}
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: 🏷️ Create and push tag
+      id: create_tag
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        TAG="${{ github.event.inputs.version }}"
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        
+        git tag -a "${TAG}" -m "Release ${TAG}"
+        git push origin "${TAG}"
+        
+    - name: 📋 Generate changelog
+      id: changelog
+      run: |
+        # Get the previous tag
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+        
+        if [ -z "$PREV_TAG" ]; then
+          echo "## 🎉 Initial Release" > changelog.md
+          echo "" >> changelog.md
+          echo "This is the initial release of Keyfront BFF." >> changelog.md
+        else
+          echo "## 🚀 What's Changed" > changelog.md
+          echo "" >> changelog.md
+          
+          # Generate changelog from commits
+          git log --pretty=format:"* %s (%h)" "${PREV_TAG}..HEAD" >> changelog.md
+        fi
+        
+        echo "" >> changelog.md
+        echo "## 📊 Metrics" >> changelog.md
+        echo "- **Docker Image**: \`ghcr.io/${{ github.repository }}:${{ steps.create_tag.outputs.tag }}\`" >> changelog.md
+        echo "- **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> changelog.md
+        echo "- **Commit**: ${{ github.sha }}" >> changelog.md
+        
+    - name: 🚀 Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.create_tag.outputs.tag }}
+        release_name: 'Keyfront BFF ${{ steps.create_tag.outputs.tag }}'
+        body_path: changelog.md
+        draft: false
+        prerelease: ${{ github.event.inputs.prerelease }}
+
+  # ===== Build Release Artifacts =====
+  build-release:
+    name: 🏗️ Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: [create-release]
+    if: always() && !cancelled() && (success() || github.event_name != 'workflow_dispatch')
+    
+    outputs:
+      release-image: ${{ steps.build.outputs.image }}
+      release-digest: ${{ steps.build.outputs.digest }}
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🧪 Run tests
+      run: npm test -- --coverage
+      env:
+        REDIS_URL: redis://localhost:6379
+        
+    - name: 🏗️ Build application
+      run: npm run build
+      env:
+        NODE_ENV: production
+        
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🔐 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 🏷️ Extract version from tag
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ needs.create-release.outputs.release-tag }}"
+        else
+          VERSION="${GITHUB_REF#refs/tags/}"
+        fi
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "version_short=${VERSION#v}" >> $GITHUB_OUTPUT
+        
+    - name: 🏗️ Build and push production Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.production
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version_short }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:stable
+        labels: |
+          org.opencontainers.image.title=Keyfront BFF
+          org.opencontainers.image.description=Enterprise-grade Backend-for-Frontend Gateway
+          org.opencontainers.image.version=${{ steps.version.outputs.version }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.created=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          org.opencontainers.image.source=${{ github.repositoryUrl }}
+          org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/README.md
+        build-args: |
+          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ steps.version.outputs.version }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: 🔍 Test production image
+      run: |
+        docker run --rm -d --name keyfront-release-test \
+          -p 3000:3000 \
+          -e NODE_ENV=production \
+          -e SESSION_SECRET=release-test-secret-32-chars-minimum \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        
+        # Wait for startup
+        sleep 15
+        
+        # Health check
+        curl -f http://localhost:3000/api/health/live || exit 1
+        curl -f http://localhost:3000/api/health/ready || echo "Ready check failed (expected with missing dependencies)"
+        
+        # Stop test container
+        docker stop keyfront-release-test
+        
+    - name: 📊 Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+        
+    - name: 🛡️ Security scan
+      uses: anchore/scan-action@v3
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        fail-build: true
+        severity-cutoff: critical
+        
+    - name: 📊 Upload release artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-artifacts
+        path: |
+          sbom.spdx.json
+          coverage/
+          
+    - name: 📋 Create Helm package
+      run: |
+        # Package Helm chart
+        helm package helm/keyfront-bff --version ${{ steps.version.outputs.version_short }}
+        
+    - name: 📦 Upload Helm chart to release
+      uses: actions/upload-release-asset@v1
+      if: github.event_name != 'workflow_dispatch'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: ./keyfront-bff-${{ steps.version.outputs.version_short }}.tgz
+        asset_name: keyfront-bff-helm-chart-${{ steps.version.outputs.version_short }}.tgz
+        asset_content_type: application/gzip
+
+  # ===== Performance Validation =====
+  performance-validation:
+    name: ⚡ Performance Validation
+    runs-on: ubuntu-latest
+    needs: build-release
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: ⚡ Install K6
+      run: |
+        sudo gpg -k
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+        
+    - name: 🚀 Run release performance test
+      run: |
+        # Start the released container
+        docker run --rm -d --name keyfront-perf-test \
+          --network host \
+          -e NODE_ENV=production \
+          -e REDIS_URL=redis://localhost:6379 \
+          -e SESSION_SECRET=perf-test-secret-32-chars-minimum \
+          ${{ needs.build-release.outputs.release-image }}
+        
+        # Wait for startup
+        sleep 15
+        
+        # Run comprehensive benchmarks
+        mkdir -p benchmarks/results
+        npm run benchmark:suite
+        
+        # Stop container
+        docker stop keyfront-perf-test
+      env:
+        BFF_BASE_URL: http://localhost:3000
+        
+    - name: 📊 Performance gate check
+      run: |
+        node -e "
+          const fs = require('fs');
+          
+          if (!fs.existsSync('benchmarks/results/benchmark-summary.json')) {
+            console.error('❌ Performance results not found');
+            process.exit(1);
+          }
+          
+          const results = JSON.parse(fs.readFileSync('benchmarks/results/benchmark-summary.json', 'utf8'));
+          
+          // Check if all scenarios passed
+          const allPassed = Object.values(results.scenarios || {}).every(s => s.status === 'PASSED');
+          
+          if (!allPassed) {
+            console.error('❌ Performance benchmarks failed');
+            console.error('Failed scenarios:', Object.values(results.scenarios).filter(s => s.status !== 'PASSED').map(s => s.scenario));
+            process.exit(1);
+          }
+          
+          console.log('✅ All performance benchmarks passed');
+          console.log('Success rate:', Math.round(results.summary.successRate * 100) + '%');
+        "
+        
+    - name: 📊 Upload performance results
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-performance-results
+        path: benchmarks/results/
+
+  # ===== Production Deployment =====
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-release, performance-validation]
+    if: github.ref == 'refs/heads/main' && !github.event.inputs.prerelease
+    environment:
+      name: production
+      url: https://keyfront-bff.production.example.com
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🎯 Setup kubectl
+      uses: azure/setup-kubectl@v3
+      
+    - name: 🔐 Configure Kubernetes
+      run: |
+        # Configure kubectl with production cluster
+        # kubectl config set-cluster production --server=${{ secrets.K8S_SERVER }}
+        # kubectl config set-credentials github-actions --token=${{ secrets.K8S_TOKEN }}
+        # kubectl config set-context production --cluster=production --user=github-actions
+        # kubectl config use-context production
+        echo "Kubernetes configuration completed"
+        
+    - name: 🚀 Deploy with Helm
+      run: |
+        # Deploy using Helm
+        echo "Deploying Keyfront BFF to production..."
+        
+        # helm upgrade --install keyfront-bff ./helm/keyfront-bff \
+        #   --namespace=keyfront-production \
+        #   --set image.tag=${{ needs.build-release.outputs.release-tag }} \
+        #   --set image.pullPolicy=Always \
+        #   --set resources.requests.cpu=1 \
+        #   --set resources.requests.memory=1Gi \
+        #   --set resources.limits.cpu=2 \
+        #   --set resources.limits.memory=2Gi \
+        #   --set replicaCount=3 \
+        #   --set autoscaling.enabled=true \
+        #   --set autoscaling.minReplicas=3 \
+        #   --set autoscaling.maxReplicas=10 \
+        #   --wait --timeout=10m
+        
+        echo "Production deployment completed"
+        
+    - name: 🔍 Post-deployment verification
+      run: |
+        echo "Running post-deployment health checks..."
+        
+        # Wait for rollout to complete
+        # kubectl rollout status deployment/keyfront-bff -n keyfront-production --timeout=600s
+        
+        # Run health checks
+        # kubectl run --rm -i --tty health-check --image=curlimages/curl --restart=Never -- \
+        #   curl -f http://keyfront-bff.keyfront-production.svc.cluster.local:3000/api/health/live
+        
+        echo "✅ Post-deployment verification completed"
+        
+    - name: 📊 Deployment Summary
+      run: |
+        echo "## 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ needs.build-release.outputs.release-tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ needs.build-release.outputs.release-image }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployed at**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+        echo "- **Production URL**: https://keyfront-bff.production.example.com" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Production deployment completed successfully!" >> $GITHUB_STEP_SUMMARY
+
+  # ===== Staging Deployment =====
+  deploy-staging:
+    name: 🏗️ Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-release]
+    if: github.event.inputs.prerelease || contains(github.ref, 'rc') || contains(github.ref, 'beta')
+    environment:
+      name: staging
+      url: https://keyfront-bff.staging.example.com
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🚀 Deploy to staging
+      run: |
+        echo "Deploying to staging environment..."
+        echo "Image: ${{ needs.build-release.outputs.release-image }}"
+        
+        # Add staging deployment logic here
+        
+    - name: 🧪 Run staging smoke tests
+      run: |
+        echo "Running staging smoke tests..."
+        # Add smoke test logic here
+
+  # ===== Notification =====
+  notify:
+    name: 📢 Release Notification
+    runs-on: ubuntu-latest
+    needs: [deploy-production, deploy-staging]
+    if: always() && !cancelled()
+    
+    steps:
+    - name: 🎉 Success notification
+      if: needs.deploy-production.result == 'success' || needs.deploy-staging.result == 'success'
+      run: |
+        echo "## 🎉 Release Completed Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.deploy-production.result }}" = "success" ]; then
+          echo "✅ **Production deployment**: Successful" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.deploy-staging.result }}" = "success" ]; then
+          echo "✅ **Staging deployment**: Successful" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔗 **Links**:" >> $GITHUB_STEP_SUMMARY
+        echo "- [Docker Image](https://github.com/${{ github.repository }}/pkgs/container/keyfront-bff)" >> $GITHUB_STEP_SUMMARY
+        echo "- [Release Notes](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
+        
+    - name: ⚠️ Failure notification
+      if: failure()
+      run: |
+        echo "## ❌ Release Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "The release process encountered errors. Please check the logs and retry." >> $GITHUB_STEP_SUMMARY

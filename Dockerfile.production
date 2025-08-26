@@ -1,0 +1,113 @@
+# Production-ready Multi-stage Dockerfile for Keyfront BFF (Clean Build)
+# This version assumes the codebase has all issues resolved
+
+# Stage 1: Base dependencies
+FROM node:20-alpine AS base
+
+# Install security updates and required system packages
+RUN apk update && apk upgrade && apk add --no-cache \
+    dumb-init \
+    curl \
+    ca-certificates \
+    && rm -rf /var/cache/apk/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files for dependency resolution
+COPY package*.json ./
+
+# Stage 2: Production dependencies only
+FROM base AS deps
+
+# Install production dependencies only with clean cache
+RUN npm ci --only=production --frozen-lockfile && \
+    npm cache clean --force
+
+# Stage 3: Build dependencies and application
+FROM base AS builder
+
+# Install all dependencies (including dev dependencies for build)
+RUN npm ci --frozen-lockfile
+
+# Copy source code (optimized with .dockerignore)
+COPY . .
+
+# Set build environment variables
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1
+
+# Run quality checks (strict mode)
+RUN npm run type-check
+RUN npm run lint
+
+# Build the Next.js application
+RUN npm run build
+
+# Stage 4: Test stage (optional for CI/CD)
+FROM builder AS test
+
+# Run all tests
+RUN npm test
+
+# Stage 5: Production runtime image
+FROM node:20-alpine AS runtime
+
+# Install runtime dependencies and create user
+RUN apk update && apk upgrade && apk add --no-cache \
+    dumb-init \
+    curl \
+    ca-certificates \
+    && rm -rf /var/cache/apk/* \
+    && addgroup -g 1001 -S nodejs \
+    && adduser -S nextjs -u 1001
+
+# Set working directory
+WORKDIR /app
+
+# Copy production dependencies
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
+
+# Copy built Next.js application
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+
+# Copy public directory if it exists
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public 2>/dev/null || true
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/logs /app/tmp && \
+    chown -R nextjs:nodejs /app
+
+# Set production environment variables
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1
+
+# Health check using the application's health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/api/health/live || exit 1
+
+# Expose port
+EXPOSE 3000
+
+# Switch to non-root user for security
+USER nextjs
+
+# Start the application with proper signal handling
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "server.js"]
+
+# Metadata labels following OCI specifications
+LABEL maintainer="Keyfront Team" \
+      version="0.1.0" \
+      description="Production Keyfront BFF Gateway" \
+      org.opencontainers.image.title="Keyfront BFF" \
+      org.opencontainers.image.description="Backend-for-Frontend Gateway for Keycloak Authentication & Authorization" \
+      org.opencontainers.image.vendor="Keyfront Team" \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.url="https://github.com/keyfront/keyfront" \
+      org.opencontainers.image.source="https://github.com/keyfront/keyfront" \
+      org.opencontainers.image.documentation="https://github.com/keyfront/keyfront#readme"

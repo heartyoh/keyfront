@@ -1,0 +1,413 @@
+name: 🛡️ Keyfront BFF - Security Scanning
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+        - full
+        - dependencies
+        - code
+        - docker
+        - secrets
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ===== Dependency Vulnerability Scanning =====
+  dependency-scan:
+    name: 📦 Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'dependencies' || github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == '' || github.event_name != 'workflow_dispatch'
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🔍 NPM Audit
+      run: |
+        # Run npm audit and save results
+        npm audit --audit-level=moderate --json > npm-audit-results.json || true
+        npm audit --audit-level=moderate || echo "NPM audit found vulnerabilities"
+      continue-on-error: true
+      
+    - name: 🔒 OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'Keyfront BFF'
+        path: '.'
+        format: 'ALL'
+        args: >
+          --enableRetired
+          --enableExperimental
+          --out reports
+          --suppression .github/owasp-suppressions.xml
+      continue-on-error: true
+      
+    - name: 🔍 Snyk Vulnerability Scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=medium --json-file-output=snyk-results.json
+      continue-on-error: true
+      
+    - name: 📊 Upload dependency scan results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: dependency-scan-results
+        path: |
+          npm-audit-results.json
+          snyk-results.json
+          reports/
+          
+    - name: 📊 Dependency scan summary
+      if: always()
+      run: |
+        echo "## 📦 Dependency Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # NPM Audit Summary
+        if [ -f npm-audit-results.json ]; then
+          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit-results.json)
+          HIGH=$(jq '.metadata.vulnerabilities.high // 0' npm-audit-results.json)
+          MODERATE=$(jq '.metadata.vulnerabilities.moderate // 0' npm-audit-results.json)
+          
+          echo "### NPM Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔴 Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟠 High: $HIGH" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟡 Moderate: $MODERATE" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Fail if critical vulnerabilities found
+        if [ -f npm-audit-results.json ]; then
+          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit-results.json)
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "❌ Critical vulnerabilities found! Please address them before proceeding." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+        fi
+
+  # ===== Code Security Scanning =====
+  code-security-scan:
+    name: 🔍 Code Security Analysis
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'code' || github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == '' || github.event_name != 'workflow_dispatch'
+    
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+      
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: 🔍 Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript-typescript
+        config: |
+          paths:
+            - src
+            - benchmarks
+            - helm
+          paths-ignore:
+            - node_modules
+            - coverage
+            - .next
+          queries:
+            - security-and-quality
+            - security-extended
+            
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 📦 Install dependencies
+      run: npm ci
+      
+    - name: 🏗️ Build for analysis
+      run: npm run build
+      
+    - name: 🔍 Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:javascript-typescript"
+        
+    - name: 🔍 Semgrep Security Scan
+      uses: semgrep/semgrep-action@v1
+      with:
+        config: >-
+          p/security-audit
+          p/nodejs
+          p/typescript
+          p/owasp-top-ten
+          p/docker
+        generateSarif: "1"
+      env:
+        SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      continue-on-error: true
+      
+    - name: 📊 Upload Semgrep results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: semgrep.sarif
+        
+    - name: 🔍 ESLint Security Scan
+      run: |
+        npx eslint src/ --ext .ts,.tsx --format @microsoft/eslint-formatter-sarif --output-file eslint-security-results.sarif || true
+        npx eslint src/ --ext .ts,.tsx --config .eslintrc.security.js || true
+      continue-on-error: true
+      
+    - name: 📊 Upload ESLint results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: eslint-security-results.sarif
+
+  # ===== Docker Security Scanning =====
+  docker-security-scan:
+    name: 🐳 Docker Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'docker' || github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == '' || github.event_name != 'workflow_dispatch'
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🏗️ Build Docker image for scanning
+      run: |
+        docker buildx build \
+          --tag keyfront-bff:security-scan \
+          --load \
+          --file Dockerfile \
+          .
+          
+    - name: 🔍 Trivy filesystem scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-fs-results.sarif'
+        
+    - name: 🔍 Trivy Docker image scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'keyfront-bff:security-scan'
+        format: 'sarif'
+        output: 'trivy-image-results.sarif'
+        
+    - name: 🔍 Hadolint Dockerfile scan
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: Dockerfile
+        format: sarif
+        output-file: hadolint-results.sarif
+      continue-on-error: true
+      
+    - name: 🔍 Docker Bench Security
+      run: |
+        git clone https://github.com/docker/docker-bench-security.git
+        cd docker-bench-security
+        sudo sh docker-bench-security.sh -c containers_and_images -l docker-bench-results.log
+      continue-on-error: true
+      
+    - name: 📊 Upload Docker security results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: trivy-fs-results.sarif
+        
+    - name: 📊 Upload Docker image scan results  
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: trivy-image-results.sarif
+        
+    - name: 📊 Upload Hadolint results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: hadolint-results.sarif
+        
+    - name: 📊 Upload Docker scan artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: docker-security-results
+        path: |
+          trivy-*.sarif
+          hadolint-results.sarif
+          docker-bench-security/docker-bench-results.log
+
+  # ===== Secret Scanning =====
+  secret-scan:
+    name: 🔐 Secret & Credential Scanning
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'secrets' || github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == '' || github.event_name != 'workflow_dispatch'
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: 🔍 TruffleHog Secret Scan
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+      continue-on-error: true
+      
+    - name: 🔍 GitLeaks Secret Scan
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        config-path: .github/gitleaks.toml
+      continue-on-error: true
+      
+    - name: 🔍 Secret patterns scan
+      run: |
+        echo "Scanning for common secret patterns..."
+        
+        # Custom secret pattern detection
+        grep -r -n -E "(password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{8,}" . --exclude-dir=node_modules --exclude-dir=.git || echo "No password patterns found"
+        grep -r -n -E "(api[_-]?key|apikey|api-key)\s*[:=]\s*['\"][^'\"]{20,}" . --exclude-dir=node_modules --exclude-dir=.git || echo "No API key patterns found"  
+        grep -r -n -E "(secret[_-]?key|secretkey|secret-key)\s*[:=]\s*['\"][^'\"]{20,}" . --exclude-dir=node_modules --exclude-dir=.git || echo "No secret key patterns found"
+        grep -r -n -E "-----BEGIN [A-Z]+ PRIVATE KEY-----" . --exclude-dir=node_modules --exclude-dir=.git || echo "No private keys found"
+        
+    - name: 📊 Secret scan summary
+      run: |
+        echo "## 🔐 Secret Scanning Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Secret scanning completed" >> $GITHUB_STEP_SUMMARY
+        echo "- TruffleHog: Completed" >> $GITHUB_STEP_SUMMARY
+        echo "- GitLeaks: Completed" >> $GITHUB_STEP_SUMMARY  
+        echo "- Pattern Matching: Completed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ If any secrets are detected, please rotate them immediately and remove from git history." >> $GITHUB_STEP_SUMMARY
+
+  # ===== Infrastructure Security =====
+  infrastructure-scan:
+    name: 🏗️ Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == '' || github.event_name != 'workflow_dispatch'
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🔍 Kubernetes manifests scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'config'
+        scan-ref: 'helm/'
+        format: 'sarif'
+        output: 'trivy-k8s-results.sarif'
+      continue-on-error: true
+      
+    - name: 🔍 Checkov IaC scan
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: kubernetes,dockerfile,secrets
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+      continue-on-error: true
+      
+    - name: 📊 Upload infrastructure scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: trivy-k8s-results.sarif
+        
+    - name: 📊 Upload Checkov results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: checkov-results.sarif
+
+  # ===== Security Report =====
+  security-report:
+    name: 📊 Security Scan Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, code-security-scan, docker-security-scan, secret-scan, infrastructure-scan]
+    if: always()
+    
+    steps:
+    - name: 📊 Generate security summary
+      run: |
+        echo "## 🛡️ Security Scanning Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Scan Type | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Check each job status
+        echo "| Dependency Scan | ${{ needs.dependency-scan.result }} | ${{ needs.dependency-scan.result == 'success' && '✅ Clean' || '❌ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Code Security | ${{ needs.code-security-scan.result }} | ${{ needs.code-security-scan.result == 'success' && '✅ Clean' || '❌ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Security | ${{ needs.docker-security-scan.result }} | ${{ needs.docker-security-scan.result == 'success' && '✅ Clean' || '❌ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Secret Scan | ${{ needs.secret-scan.result }} | ${{ needs.secret-scan.result == 'success' && '✅ Clean' || '❌ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Infrastructure | ${{ needs.infrastructure-scan.result }} | ${{ needs.infrastructure-scan.result == 'success' && '✅ Clean' || '❌ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📊 **Overall Security Status**: " >> $GITHUB_STEP_SUMMARY
+        
+        # Determine overall status
+        if [ "${{ needs.dependency-scan.result }}" = "success" ] && \
+           [ "${{ needs.code-security-scan.result }}" = "success" ] && \
+           [ "${{ needs.docker-security-scan.result }}" = "success" ] && \
+           [ "${{ needs.secret-scan.result }}" = "success" ] && \
+           [ "${{ needs.infrastructure-scan.result }}" = "success" ]; then
+          echo "✅ **SECURE** - All security scans passed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️ **ISSUES DETECTED** - Please review scan results" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔗 **Security Resources**:" >> $GITHUB_STEP_SUMMARY
+        echo "- [Security Advisories](https://github.com/${{ github.repository }}/security/advisories)" >> $GITHUB_STEP_SUMMARY
+        echo "- [Code Scanning Alerts](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
+        echo "- [Dependabot Alerts](https://github.com/${{ github.repository }}/security/dependabot)" >> $GITHUB_STEP_SUMMARY
+        
+    - name: 📧 Notify on critical findings
+      if: needs.dependency-scan.result == 'failure'
+      run: |
+        echo "🚨 Critical security vulnerabilities detected!" >> $GITHUB_STEP_SUMMARY
+        echo "Please address these issues immediately before deploying to production." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,124 @@
+# GitLeaks Configuration for Keyfront BFF
+# Scans for secrets and sensitive information in Git repositories
+
+title = "Keyfront BFF GitLeaks Config"
+
+[extend]
+# Use default GitLeaks rules as base
+useDefault = true
+
+[[rules]]
+description = "Keycloak Client Secret"
+id = "keycloak-client-secret"
+regex = '''(?i)(KC_CLIENT_SECRET|keycloak[_-]?client[_-]?secret|client[_-]?secret)\s*[:=]\s*["']?([a-zA-Z0-9\-_]{20,})["']?'''
+secretGroup = 2
+
+[[rules]]
+description = "Session Secret"
+id = "session-secret"
+regex = '''(?i)(SESSION_SECRET|session[_-]?secret)\s*[:=]\s*["']?([a-zA-Z0-9\-_]{16,})["']?'''
+secretGroup = 2
+
+[[rules]]
+description = "Redis URL with Password"
+id = "redis-url-password"
+regex = '''redis://[^:]*:([^@]+)@'''
+secretGroup = 1
+
+[[rules]]
+description = "JWT Secret"
+id = "jwt-secret"
+regex = '''(?i)(JWT_SECRET|jwt[_-]?secret|JWT_KEY|jwt[_-]?key)\s*[:=]\s*["']?([a-zA-Z0-9\-_+/=]{20,})["']?'''
+secretGroup = 2
+
+[[rules]]
+description = "Database Password"
+id = "database-password"
+regex = '''(?i)(DB_PASSWORD|DATABASE_PASSWORD|POSTGRES_PASSWORD|db[_-]?password|database[_-]?password)\s*[:=]\s*["']?([^\s"']{8,})["']?'''
+secretGroup = 2
+
+[[rules]]
+description = "API Key Pattern"
+id = "api-key-pattern"
+regex = '''(?i)(API_KEY|api[_-]?key|APIKEY)\s*[:=]\s*["']?([a-zA-Z0-9\-_]{20,})["']?'''
+secretGroup = 2
+
+[[rules]]
+description = "Private Key"
+id = "private-key"
+regex = '''-----BEGIN [A-Z]+ PRIVATE KEY-----'''
+
+[[rules]]
+description = "Certificate"
+id = "certificate"
+regex = '''-----BEGIN CERTIFICATE-----'''
+
+[[rules]]
+description = "SSH Private Key"
+id = "ssh-private-key"
+regex = '''-----BEGIN OPENSSH PRIVATE KEY-----'''
+
+# Allowlist for acceptable patterns
+[allowlist]
+description = "Allowlist for false positives"
+files = [
+    ".*\\.md$",          # Markdown documentation
+    ".*\\.example$",     # Example files  
+    ".*\\.template$",    # Template files
+    ".*\\.test\\.[jt]s$", # Test files
+    ".*\\.spec\\.[jt]s$", # Spec files
+]
+
+paths = [
+    "node_modules/",     # Dependencies
+    ".git/",            # Git directory
+    "coverage/",        # Coverage reports
+    ".next/",           # Next.js build directory
+    "benchmarks/results/", # Benchmark results
+]
+
+regexes = [
+    # Allow placeholder/example values
+    "test-secret",
+    "example-key",
+    "placeholder",
+    "your-secret-here",
+    "replace-me",
+    "changeme",
+    "dummy",
+    
+    # Allow test/development values
+    "test-session-secret-32-chars-minimum",
+    "development-only-secret",
+    "benchmark-secret",
+    "integration-test-secret",
+    
+    # Allow documentation patterns
+    "KC_CLIENT_SECRET=your-secret-here",
+    "SESSION_SECRET=your-32-char-secret",
+    
+    # Allow base64 encoded test data
+    "eyJ.*test.*",
+    
+    # Allow UUID patterns in tests
+    "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+]
+
+# Additional configuration
+[extend]
+# Path to additional rules
+path = ""
+
+# Global settings
+[settings]
+# Minimum entropy for string to be considered secret
+entropy = 3.5
+
+# Maximum line length to scan
+maxLineLength = 1000
+
+# Scan specific file types only
+scanUntracked = false
+
+# Report format (json, csv, sarif)
+format = "sarif"

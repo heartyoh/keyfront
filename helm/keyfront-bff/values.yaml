@@ -1,0 +1,328 @@
+# Default values for keyfront-bff
+# This is a YAML-formatted file
+# Declare variables to be passed into your templates
+
+## Global Configuration
+global:
+  # Global image registry (override individual registries)
+  imageRegistry: ""
+  # Global image pull secrets
+  imagePullSecrets: []
+  # Global storage class
+  storageClass: ""
+
+## Image Configuration
+image:
+  registry: docker.io
+  repository: keyfront/bff
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+  # Optionally specify an array of imagePullSecrets
+  pullSecrets: []
+  # pullSecrets:
+  #   - myRegistryKeySecretName
+
+## Deployment Configuration
+replicaCount: 2
+
+## Strategy for deployment updates
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+## Pod Configuration
+podAnnotations: {}
+podLabels: {}
+
+## Security Context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+## Service Configuration
+service:
+  type: ClusterIP
+  port: 3000
+  targetPort: http
+  protocol: TCP
+  # Additional service annotations
+  annotations: {}
+  # service.beta.kubernetes.io/aws-load-balancer-type: nlb
+
+## Ingress Configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: keyfront-bff.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: keyfront-bff-tls
+  #    hosts:
+  #      - keyfront-bff.local
+
+## Resources
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+## Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  # Custom metrics (optional)
+  # behavior:
+  #   scaleDown:
+  #     stabilizationWindowSeconds: 300
+  #     policies:
+  #     - type: Percent
+  #       value: 10
+  #       periodSeconds: 60
+
+## Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+
+## Node Selection
+nodeSelector: {}
+
+## Tolerations
+tolerations: []
+
+## Affinity
+affinity: {}
+  # podAntiAffinity:
+  #   preferredDuringSchedulingIgnoredDuringExecution:
+  #   - weight: 100
+  #     podAffinityTerm:
+  #       labelSelector:
+  #         matchExpressions:
+  #         - key: app.kubernetes.io/name
+  #           operator: In
+  #           values:
+  #           - keyfront-bff
+  #       topologyKey: kubernetes.io/hostname
+
+## Health Checks
+livenessProbe:
+  httpGet:
+    path: /api/health/live
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+readinessProbe:
+  httpGet:
+    path: /api/health/ready
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+startupProbe:
+  httpGet:
+    path: /api/health/live
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 30
+  successThreshold: 1
+
+## Application Configuration
+config:
+  # Node.js Environment
+  nodeEnv: production
+  
+  # Server Configuration
+  port: 3000
+  
+  # Session Configuration
+  sessionSecret: ""  # Must be provided via secret
+  sessionCookieName: "keyfront.sid"
+  sessionMaxAge: 3600  # 1 hour
+  
+  # CORS Configuration
+  corsOrigins: "*"
+  
+  # Rate Limiting
+  rateLimitRpm: 100
+
+## Keycloak Configuration
+keycloak:
+  # OIDC Issuer URL (required)
+  issuerUrl: ""  # e.g., https://keycloak.example.com/realms/master
+  
+  # Client Configuration (required)
+  clientId: ""
+  clientSecret: ""  # Will be stored in secret
+  
+  # Redirect URLs
+  redirectUri: ""   # e.g., https://keyfront-bff.example.com/api/auth/callback
+  logoutRedirectUri: ""  # e.g., https://keyfront-bff.example.com/
+
+## Redis Configuration
+redis:
+  # Redis connection URL
+  url: ""  # e.g., redis://redis-service:6379
+  
+  # Or individual components
+  host: ""
+  port: 6379
+  password: ""  # Will be stored in secret
+  database: 0
+  
+  # Connection pool
+  maxRetriesPerRequest: 3
+  retryDelayOnFailover: 100
+
+## Downstream API Configuration
+downstreamApi:
+  baseUrl: ""  # e.g., https://api.example.com
+
+## Secrets
+secrets:
+  # Create secret automatically
+  create: true
+  # Use existing secret
+  existingSecret: ""
+  # Secret keys
+  keys:
+    sessionSecret: session-secret
+    keycloakClientSecret: keycloak-client-secret
+    redisPassword: redis-password
+
+## ConfigMaps
+configMaps:
+  # Create configmap automatically
+  create: true
+  # Use existing configmap
+  existingConfigMap: ""
+
+## Service Account
+serviceAccount:
+  # Create service account
+  create: true
+  # Use existing service account
+  existingServiceAccount: ""
+  # Service account annotations
+  annotations: {}
+  # Service account name (auto-generated if empty)
+  name: ""
+
+## RBAC
+rbac:
+  create: true
+  rules: []
+
+## Monitoring
+monitoring:
+  # ServiceMonitor for Prometheus
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    annotations: {}
+    # Metrics path
+    path: /api/metrics
+    # Honor labels from target
+    honorLabels: false
+
+  # Grafana Dashboard
+  grafana:
+    enabled: false
+    namespace: ""
+    labels: {}
+
+## Network Policy
+networkPolicy:
+  enabled: false
+  ingress:
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 6379  # Redis
+        - protocol: TCP  
+          port: 443   # HTTPS
+        - protocol: TCP
+          port: 80    # HTTP
+
+## Pod Security Standards
+podSecurity:
+  enforce: "restricted"
+  audit: "restricted"
+  warn: "restricted"
+
+## Extra Configuration
+# Extra environment variables
+extraEnvVars: []
+# - name: CUSTOM_VAR
+#   value: "custom_value"
+
+# Extra environment variables from secrets/configmaps
+extraEnvVarsSecret: ""
+extraEnvVarsConfigMap: ""
+
+# Extra volumes
+extraVolumes: []
+# - name: custom-volume
+#   emptyDir: {}
+
+# Extra volume mounts
+extraVolumeMounts: []
+# - name: custom-volume
+#   mountPath: /custom
+
+# Extra containers
+extraContainers: []
+
+# Extra init containers
+initContainers: []
+
+# Extra labels for all resources
+commonLabels: {}
+
+# Extra annotations for all resources
+commonAnnotations: {}
